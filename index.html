@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visor QRs Componentes</title>
+    <link rel="stylesheet" href="styles.css">
+    
+    <!-- Librería SheetJS para leer Excel -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <!-- Librería QRCode.js clásica -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+</head>
+<body>
+
+    <!-- Panel Superior -->
+    <header class="frame-top">
+        <div class="top-left">
+            <label class="btn-upload">
+                📁 Cargar / Actualizar Excel
+                <input type="file" id="excel-file" accept=".xlsx, .xls" style="display: none;">
+            </label>
+            <span id="status-label" class="status-offline">● Seleccione o arrastre el archivo datos.xlsx</span>
+        </div>
+
+        <!-- Logo Institucional/Planta -->
+        <div class="top-logo-container">
+            <img src="logo.png" alt="Logo" class="img-logo" onerror="this.style.display='none'">
+        </div>
+
+        <div class="search-container">
+            <input type="text" id="entry-busqueda" placeholder="🔍 Escriba para buscar Material o Máquina..." disabled>
+            <div id="frame-sugerencias" class="sugerencias-box" style="display: none;"></div>
+        </div>
+    </header>
+
+    <!-- Panel de Descripción -->
+    <section class="frame-def">
+        <div class="def-left">
+            <span class="def-title">DESCRIPCIÓN:</span>
+            <span id="lbl-definicion" class="def-text">Seleccione el archivo datos.xlsx para comenzar...</span>
+        </div>
+        <div class="def-right">
+            <span id="lbl-info-maq" class="info-maq">Máquina: ---</span>
+            <span id="lbl-info-mat" class="info-mat">Material: ---</span>
+        </div>
+    </section>
+
+    <!-- Área Principal Desplazable -->
+    <main class="scroll-canvas">
+        <h2 id="title-comp" class="section-header" style="display: none;">━ COMPONENTES DE MÁQUINA ━</h2>
+        <div id="grid-componentes" class="cards-grid"></div>
+
+        <div id="packaging-container" class="packaging-wrapper" style="display: none;">
+            <div class="pack-column">
+                <h2 class="section-header">━ PALLET PACKAGING ━</h2>
+                <div id="grid-pallet" class="pack-grid pack-left"></div>
+            </div>
+            <div class="pack-column">
+                <h2 class="section-header">━ SINGLE PACKAGING ━</h2>
+                <div id="grid-single" class="pack-grid pack-right"></div>
+            </div>
+        </div>
+    </main>
+
+    <script src="app.js"></script>
+</body>
+</html>
