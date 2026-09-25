@@ -1,86 +1,172 @@
+// ==============================================================================
+// 1. CONFIGURACIÓN Y CONSTANTES
+// ==============================================================================
+
+// URL de tu Web App desplegada en Google Apps Script
+const URL_APPS_SCRIPT = "https://script.google.com/macros/s/AKfycbxRu_PdrXqqFHRL3PtCvJKkY89mu2zajbQHHGIpHWJfImxiRIbG63nM0LGzFnjwNsR6uQ/exec";
+
+// Claves para el almacenamiento local (Equivalente a SharedPreferences)
+const CACHE_KEY_DATOS = "json_datos_planta";
+const CACHE_KEY_DEVICE = "device_unique_id";
+
 let df_componentes = [];
 let df_pallet = [];
 let df_single = [];
 let lista_materiales_unicos = [];
 
-document.getElementById('excel-file').addEventListener('change', cargarExcelDesdeInput);
-document.getElementById('entry-busqueda').addEventListener('input', alEscribirBuscador);
+// ==============================================================================
+// 2. GESTIÓN DE MEMORIA LOCAL (LocalStorage / Cache)
+// ==============================================================================
 
-// Intento de carga automática vía fetch (si la red compartida permite protocolo HTTP/UNC)
+function obtenerOCrearDeviceId() {
+    let id = localStorage.getItem(CACHE_KEY_DEVICE);
+    if (!id) {
+        id = 'DEV-' + Math.random().toString(36).substring(2, 10).toUpperCase();
+        localStorage.setItem(CACHE_KEY_DEVICE, id);
+    }
+    return id;
+}
+
+function guardarDatosEnCache(data) {
+    try {
+        localStorage.setItem(CACHE_KEY_DATOS, JSON.stringify(data));
+    } catch (e) {
+        console.warn("No se pudo guardar en caché local:", e);
+    }
+}
+
+function obtenerDatosDeCache() {
+    const raw = localStorage.getItem(CACHE_KEY_DATOS);
+    if (!raw) return null;
+    try {
+        return JSON.parse(raw);
+    } catch (e) {
+        return null;
+    }
+}
+
+function limpiarMemoriaLocal() {
+    localStorage.removeItem(CACHE_KEY_DATOS);
+}
+
+// ==============================================================================
+// 3. INICIALIZACIÓN Y SINCRONIZACIÓN
+// ==============================================================================
+
 document.addEventListener('DOMContentLoaded', () => {
-    fetch('datos.xlsx')
-        .then(response => {
-            if (!response.ok) throw new Error("No fetch");
-            return response.arrayBuffer();
-        })
-        .then(buffer => procesarBufferExcel(buffer, "datos.xlsx"))
-        .catch(() => {
-            console.log("Carga por protocolo estricto local. Utilice el selector de archivos.");
-        });
+    // 1. Carga inmediata si existen datos en caché
+    const datosCache = obtenerDatosDeCache();
+    if (datosCache) {
+        df_componentes = datosCache.componentes || [];
+        df_pallet = datosCache.pallet || [];
+        df_single = datosCache.single || [];
+        
+        const lblEstado = document.getElementById('status-label');
+        lblEstado.innerText = "● Memoria Local (Actualizando...)";
+        lblEstado.className = "status-online";
+        
+        procesarDatosServidor();
+    }
+
+    // 2. Sincronización remota en segundo plano
+    cargarDatosDesdeGoogleScript();
 });
 
-function cargarExcelDesdeInput(e) {
-    const file = e.target.files[0];
-    if (!file) return;
+document.getElementById('entry-busqueda').addEventListener('input', alEscribirBuscador);
 
-    const reader = new FileReader();
-    reader.onload = function(evt) {
-        procesarBufferExcel(evt.target.result, file.name);
-    };
-    reader.readAsArrayBuffer(file);
-}
-
-function procesarBufferExcel(arrayBuffer, nombreArchivo) {
-    try {
-        const data = new Uint8Array(arrayBuffer);
-        const workbook = XLSX.read(data, { type: 'array' });
-
-        // 1. Hoja Componentes
-        if (workbook.SheetNames.length > 0) {
-            df_componentes = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { defval: "" });
-        }
-
-        // 2. Hoja Pallet Packaging
-        if (workbook.SheetNames.length > 1) {
-            df_pallet = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[1]], { defval: "" });
-        }
-
-        // 3. Hoja Single Packaging
-        if (workbook.SheetNames.length > 2) {
-            df_single = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[2]], { defval: "" });
-        }
-
-        const lblEstado = document.getElementById('status-label');
-        lblEstado.innerText = `● Conectado: ${nombreArchivo}`;
-        lblEstado.className = "status-online";
-        document.getElementById('entry-busqueda').disabled = false;
-
-        procesarExcel();
-    } catch (err) {
-        console.error("Error al procesar el Excel:", err);
-        alert("Ocurrió un error al leer el archivo de Excel.");
+function cargarDatosDesdeGoogleScript() {
+    const lblEstado = document.getElementById('status-label');
+    const lblDefinicion = document.getElementById('lbl-definicion');
+    
+    // Si no había caché previa, muestra el mensaje de carga
+    if (!obtenerDatosDeCache()) {
+        lblEstado.innerText = "● Conectando a Google Sheets...";
+        lblEstado.className = "status-offline";
+        lblDefinicion.innerText = "Cargando datos desde la nube por primera vez...";
     }
+
+    const deviceId = obtenerOCrearDeviceId();
+    const urlFinal = `${URL_APPS_SCRIPT}?deviceId=${encodeURIComponent(deviceId)}`;
+
+    // Timeout de 45 segundos (mismo que en Android)
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 45000);
+
+    fetch(urlFinal, {
+        method: 'GET',
+        mode: 'cors',
+        redirect: 'follow',
+        signal: controller.signal
+    })
+    .then(response => {
+        clearTimeout(timeoutId);
+        if (!response.ok) {
+            throw new Error(`Error HTTP: ${response.status}`);
+        }
+        return response.json();
+    })
+    .then(data => {
+        if (data.status === "OK") {
+            lblEstado.innerText = "● Sincronizado";
+            lblEstado.className = "status-online";
+            
+            // Guardar en la memoria caché local
+            guardarDatosEnCache(data);
+
+            df_componentes = data.componentes || [];
+            df_pallet = data.pallet || [];
+            df_single = data.single || [];
+
+            procesarDatosServidor();
+        } else if (data.status === "PENDIENTE") {
+            lblEstado.innerText = "⚠️ Dispositivo Pendiente";
+            lblEstado.className = "status-offline";
+            lblDefinicion.innerText = `${data.message} (ID: ${deviceId})`;
+            alert(`Dispositivo registrado (${deviceId}). Cambie su estado a PERMITIDO en la pestaña 'Dispositivos' de Google Sheets.`);
+        } else if (data.status === "WIPE_AND_BLOCK") {
+            lblEstado.innerText = "❌ Acceso Revocado";
+            lblEstado.className = "status-offline";
+            lblDefinicion.innerText = "Acceso revocado remotamente. Memoria local borrada.";
+            
+            // Borrado remoto de caché local
+            limpiarMemoriaLocal();
+            limpiarPantalla();
+        } else {
+            throw new Error(data.message || "Estado no reconocido");
+        }
+    })
+    .catch(err => {
+        clearTimeout(timeoutId);
+        console.warn("Fallo de red o timeout al conectar con Apps Script:", err);
+        
+        // Si hay datos locales, no interrumpir al usuario y notificar suavemente
+        if (obtenerDatosDeCache()) {
+            lblEstado.innerText = "● Usando datos en Caché (Sin Conexión)";
+            lblEstado.className = "status-online";
+        } else {
+            lblEstado.innerText = "❌ Error de Conexión";
+            lblEstado.className = "status-offline";
+            if (err.name === 'AbortError') {
+                lblDefinicion.innerText = "La consulta tardó más de 45 segundos. Reintente sincronizar.";
+            } else {
+                lblDefinicion.innerText = "No se pudo sincronizar. Verifique su conexión.";
+            }
+        }
+    });
 }
 
-function getVal(row, nombreCol) {
-    if (!row) return "";
-    const target = nombreCol.trim().toLowerCase();
-    const key = Object.keys(row).find(k => k.trim().toLowerCase() === target || k.trim().toLowerCase().includes(target));
-    if (key && row[key] !== undefined && row[key] !== null) {
-        const v = String(row[key]).trim();
-        return (v.toLowerCase() === 'nan' || v.toLowerCase() === 'none') ? "" : v;
-    }
-    return "";
-}
+// ==============================================================================
+// 4. PROCESAMIENTO Y FILTRADO DE DATOS
+// ==============================================================================
 
-function procesarExcel() {
+function procesarDatosServidor() {
     lista_materiales_unicos = [];
     const mapaUnicos = new Map();
 
-    df_componentes.forEach(row => {
-        const mat = getVal(row, 'material');
-        const maq = getVal(row, 'maquina');
-        const desc = getVal(row, 'definición') || getVal(row, 'definicion');
+    df_componentes.forEach(item => {
+        const mat = item.material ? String(item.material).trim() : "";
+        const maq = item.maquina ? String(item.maquina).trim() : "";
+        const desc = item.definicion ? String(item.definicion).trim() : "";
 
         if (mat && !mapaUnicos.has(`${mat}_${maq}`)) {
             mapaUnicos.set(`${mat}_${maq}`, { mat, maq, desc });
@@ -88,10 +174,26 @@ function procesarExcel() {
         }
     });
 
+    document.getElementById('entry-busqueda').disabled = false;
+
     if (lista_materiales_unicos.length > 0) {
-        seleccionarMaterial(lista_materiales_unicos[0].mat, lista_materiales_unicos[0].maq);
+        // Mantiene la selección o toma el primero
+        const inputMat = document.getElementById('lbl-info-mat').innerText.replace("Material: ", "").trim();
+        const inputMaq = document.getElementById('lbl-info-maq').innerText.replace("Máquina: ", "").trim();
+        
+        if (inputMat && inputMat !== "---") {
+            seleccionarMaterial(inputMat, inputMaq);
+        } else {
+            seleccionarMaterial(lista_materiales_unicos[0].mat, lista_materiales_unicos[0].maq);
+        }
+    } else {
+        document.getElementById('lbl-definicion').innerText = "No hay datos disponibles en la memoria local ni en la hoja.";
     }
 }
+
+// ==============================================================================
+// 5. BUSCADOR Y SUGERENCIAS
+// ==============================================================================
 
 function alEscribirBuscador() {
     const query = document.getElementById('entry-busqueda').value.toLowerCase().trim();
@@ -124,14 +226,13 @@ function seleccionarMaterial(material, maquina) {
     document.getElementById('frame-sugerencias').style.display = "none";
     document.getElementById('entry-busqueda').value = "";
 
-    const filtradosComp = df_componentes.filter(row => {
-        return getVal(row, 'material') === material && getVal(row, 'maquina') === maquina;
+    const filtradosComp = df_componentes.filter(item => {
+        return String(item.material).trim() === material && String(item.maquina).trim() === maquina;
     });
 
     let descText = "Sin descripción registrada";
-    if (filtradosComp.length > 0) {
-        const d = getVal(filtradosComp[0], 'definición') || getVal(filtradosComp[0], 'definicion');
-        if (d) descText = d;
+    if (filtradosComp.length > 0 && filtradosComp[0].definicion) {
+        descText = filtradosComp[0].definicion;
     }
 
     document.getElementById('lbl-definicion').innerText = descText;
@@ -142,18 +243,22 @@ function seleccionarMaterial(material, maquina) {
     renderizarPackaging(material, maquina);
 }
 
+// ==============================================================================
+// 6. RENDERIZADO DE COMPONENTES Y PACKAGING
+// ==============================================================================
+
 function renderizarComponentes(lista, maquina) {
     const grid = document.getElementById('grid-componentes');
     grid.innerHTML = "";
     document.getElementById('title-comp').style.display = lista.length > 0 ? "block" : "none";
 
     lista.forEach((item, index) => {
-        const comp = getVal(item, 'componente');
-        const desc = getVal(item, 'descripcion');
-        const qty = getVal(item, 'cantidad');
-        const valX = getVal(item, 'X?').toLowerCase();
+        const comp = item.codigo ? String(item.codigo).trim() : "";
+        const desc = item.descripcion ? String(item.descripcion).trim() : "";
+        const qty = item.cantidad ? String(item.cantidad).trim() : "";
+        const esX = item.esTipoX;
 
-        const datosQr = valX === 'x' ? `5X${comp}/${qty}/${maquina}/930` : `/${comp}/${qty}/${maquina}`;
+        const datosQr = esX ? `5X${comp}/${qty}/${maquina}/930` : `/${comp}/${qty}/${maquina}`;
         
         let pieQr = `${qty} PIEZAS`;
         if (!qty || qty === "0") pieQr = "1 PALLET";
@@ -169,8 +274,8 @@ function renderizarPackaging(material, maquina) {
     gridPallet.innerHTML = "";
     gridSingle.innerHTML = "";
 
-    const filtradosPallet = df_pallet.filter(row => getVal(row, 'Material') === material);
-    const filtradosSingle = df_single.filter(row => getVal(row, 'Material') === material);
+    const filtradosPallet = df_pallet.filter(item => String(item.materialRef).trim() === material);
+    const filtradosSingle = df_single.filter(item => String(item.materialRef).trim() === material);
 
     const maxFilas = Math.max(filtradosPallet.length, filtradosSingle.length);
 
@@ -178,9 +283,9 @@ function renderizarPackaging(material, maquina) {
         // --- 1. PALLET PACKAGING (COLUMNA IZQUIERDA) ---
         if (i < filtradosPallet.length) {
             const itemP = filtradosPallet[i];
-            const compP = getVal(itemP, 'Pallet Packaging Material');
-            const descP = getVal(itemP, 'Pallet description');
-            let qtyP = getVal(itemP, 'Pallet quantity') || getVal(itemP, 'quantity') || getVal(itemP, 'qty');
+            const compP = itemP.codigo ? String(itemP.codigo).trim() : "";
+            const descP = itemP.descripcion ? String(itemP.descripcion).trim() : "";
+            let qtyP = itemP.cantidad ? String(itemP.cantidad).trim() : "";
 
             if (compP) {
                 const qtyQrP = qtyP !== "" ? qtyP : "1";
@@ -196,9 +301,9 @@ function renderizarPackaging(material, maquina) {
         // --- 2. SINGLE PACKAGING (COLUMNA DERECHA) ---
         if (i < filtradosSingle.length) {
             const itemS = filtradosSingle[i];
-            const compS = getVal(itemS, 'Single Packaging Material');
-            const descS = getVal(itemS, 'Box description');
-            let qtyS = getVal(itemS, 'Single Qty') || getVal(itemS, 'quantity') || getVal(itemS, 'qty');
+            const compS = itemS.codigo ? String(itemS.codigo).trim() : "";
+            const descS = itemS.descripcion ? String(itemS.descripcion).trim() : "";
+            let qtyS = itemS.cantidad ? String(itemS.cantidad).trim() : "";
 
             if (compS) {
                 if (qtyS === "0" || qtyS === "") {
@@ -219,6 +324,10 @@ function renderizarPackaging(material, maquina) {
     const tienePackaging = gridPallet.children.length > 0 || gridSingle.children.length > 0;
     document.getElementById('packaging-container').style.display = tienePackaging ? "flex" : "none";
 }
+
+// ==============================================================================
+// 7. DIBUJO DE TARJETAS Y LIMPIEZA
+// ==============================================================================
 
 function crearTarjeta(contenedor, comp, desc, pieQr, datosQr, qrDerecha = true) {
     const card = document.createElement('div');
@@ -263,4 +372,15 @@ function crearTarjetaVacia(contenedor) {
     const card = document.createElement('div');
     card.className = "card card-vacia";
     contenedor.appendChild(card);
+}
+
+function limpiarPantalla() {
+    df_componentes = [];
+    df_pallet = [];
+    df_single = [];
+    lista_materiales_unicos = [];
+    document.getElementById('grid-componentes').innerHTML = "";
+    document.getElementById('grid-pallet').innerHTML = "";
+    document.getElementById('grid-single').innerHTML = "";
+    document.getElementById('entry-busqueda').disabled = true;
 }
