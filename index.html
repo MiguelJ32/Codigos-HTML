@@ -13,14 +13,13 @@
 </head>
 <body>
 
-    <!-- Panel Superior -->
+        <!-- Panel Superior -->
     <header class="frame-top">
         <div class="top-left">
-            <label class="btn-upload">
-                📁 Cargar / Actualizar Excel
-                <input type="file" id="excel-file" accept=".xlsx, .xls" style="display: none;">
-            </label>
-            <span id="status-label" class="status-offline">● Seleccione o arrastre el archivo datos.xlsx</span>
+            <button id="btn-sync" class="btn-upload" onclick="cargarDatosDesdeGoogleScript()">
+                🔄 Sincronizar
+            </button>
+            <span id="status-label" class="status-offline">● Conectando...</span>
         </div>
 
         <!-- Logo Institucional/Planta -->
